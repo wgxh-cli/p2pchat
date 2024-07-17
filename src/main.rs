@@ -1,17 +1,14 @@
 use libp2p::{
-  futures::StreamExt, mdns::{
-    tokio::Behaviour as MdnsBehaviour,
-    Event as MdnsEvent,
-  }, request_response::{
-    json::Behaviour as ResqBehaviour,
-    Event as ResqEvent,
-    Message as ResqMessage,
-    ProtocolSupport
-  }, swarm::{NetworkBehaviour, SwarmEvent}, tls::Config as TlsConfig, yamux::Config as YamuxConfig, PeerId, StreamProtocol, SwarmBuilder
+  core::ConnectedPoint, futures::StreamExt, mdns::{tokio::Behaviour as MdnsBehaviour, Event as MdnsEvent}, request_response::{
+    json::Behaviour as ResqBehaviour, Event as ResqEvent, Message as ResqMessage, ProtocolSupport,
+  }, swarm::{NetworkBehaviour, SwarmEvent}, tls::Config as TlsConfig, yamux::Config as YamuxConfig, Multiaddr, PeerId, StreamProtocol, SwarmBuilder
 };
 use serde::{Deserialize, Serialize};
 use std::{error::Error, time::Duration};
-use tokio::{io::{stdin, AsyncBufReadExt, BufReader}, select};
+use tokio::{
+  io::{stdin, AsyncBufReadExt, BufReader},
+  select,
+};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,9 +48,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
   swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-  let mut found: Vec<PeerId> = vec![];
-  let connected: bool = false;
-  let connected_id: Option<PeerId> = None;
+  let mut found: Vec<(PeerId, Multiaddr)> = vec![];
+  let mut connected: bool = false;
+  let mut connected_id: Option<PeerId> = None;
 
   let mut stdin = BufReader::new(stdin()).lines();
 
@@ -66,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
               println!("Found nodes!");
               for (i, node) in nodes.iter().enumerate() {
                 println!("{i}. {} - {}", node.0, node.1);
-                found.push(node.0);
+                found.push(node.clone());
               }
             },
             ChatBehaviourEvent::Resq(ResqEvent::Message { peer, message }) => {
@@ -80,19 +77,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
           }
           SwarmEvent::NewListenAddr { .. } => {}
+          SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            connected_id = Some(peer_id);
+            connected = true;
+          }
           _ => {}
         }
       },
       Ok(Some(line)) = stdin.next_line() => {
         if !connected {
           if let Ok(index) = line.parse::<u8>() {
-            if let Some(id) = found.get(index as usize) {
+            if let Some((id, addr)) = found.get(index as usize) {
               swarm.dial(*id).unwrap();
+              println!("< Connecting...");
+              connected = true;
+              connected_id = Some(*id);
+              swarm.add_peer_address(*id, addr.clone());
             } else {
-              println!("Please enter a valid node id!");
+              println!("< Please enter a valid node id!");
             }
           } else {
-            println!("Please enter a valid node id!");
+            println!("< Please enter a valid node id!");
           }
         } else {
           swarm.behaviour_mut().resq.send_request(connected_id.as_ref().unwrap(), ChatReq {
